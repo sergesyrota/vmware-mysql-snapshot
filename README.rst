@@ -13,10 +13,9 @@ Requirements
 
 Installation
 -------------------------------------------
-Place pre-freeze-script file in /usr/sbin, and run these:
 
 .. 001-commands-start
-From command line::
+Place pre-freeze-script file in /usr/sbin, and run these::
 
 	chmod 755 /usr/sbin/pre-freeze-script
 	ln -s /usr/sbin/pre-freeze-script /usr/sbin/post-thaw-script
