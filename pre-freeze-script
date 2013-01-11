@@ -1,0 +1,170 @@
+#!/usr/bin/php -q
+<?php
+
+/**
+ * This is a script that would help flush MySQL database before VMware snapshot is taken, and then release 
+ * the lock when snapshot is done
+ * Intended use: Veeam backup, or any other VMware snapshot that needs to be consistent, for that matter
+ * Usage: Place this file in /usr/sbin, and run these:
+chmod 755 /usr/sbin/pre-freeze-script
+ln -s /usr/sbin/pre-freeze-script /usr/sbin/post-thaw-script
+ln -s /usr/sbin/pre-freeze-script /usr/sbin/pre-freeze-mysql-lock
+yum install php-process
+ * Check the config below, and set mysql login and password for the instance you're working with.
+ * Then don't forget to check "Quiesce guest file system" when doing a backup
+ * You can check log file to make sure that it is being called properly.
+ * Oh, and don't forget to add the log file to "logrotate" configuration, or it might get large...
+ */
+
+/**
+ * Configuration
+ */
+
+// MySQL connection parameters
+$_config['mysqlLogin'] = '';
+$_config['mysqlPass'] = '';
+// Host name will always be localhost, as there is no point in locking a remote instance,
+// as this one needs to be flushed
+
+// File that will contain information about lock process (e.g. current state. Shared memory, if you will)
+$_config['runFile'] = '/var/run/vmware-freeze-script';
+
+// Log file where we would write down all the status changes
+$_config['logFile'] = '/var/log/vmware-freeze-script.log';
+
+// How long should we wait for the right time to do a snapshot (e.g. for long queries to finish)
+// If we go beyond this time, script will terminate with exit code 1 (signaling an error)
+$_config['snapshotTimeout'] = 600; // seconds
+
+// How long should we wait every time we tried acquiring a lock
+// Also used to determine maximum runtime of running queries beyond which we don't want to attempt lock acquisition
+$_config['lockWaitTimeout'] = 10; // seconds
+
+// For how long at most should we hold the lock once it is acquired
+$_config['maxLockTime'] = 15; // seconds
+
+/**
+ * END Configuration
+ * Do not change anything beyond this point, unless you really know what you're doing.
+ * And if so - submit a pull request so that others can take advantage of your changes too ;)
+ */
+
+// Connect to MySQL database first
+mysql_connect('localhost', $_config['mysqlLogin'], $_config['mysqlPass']) || die('Unable to connect to MySQL!');
+
+// Determine what was intended to be ran, by looking at the command line
+$command = basename($argv[0]);
+doLog( "$command called");
+switch ($command) {
+    case 'pre-freeze-script': preFreeze();
+        break;
+    case 'post-thaw-script': postThaw();
+        break;
+    case 'pre-freeze-mysql-lock': mysqlLock();
+        break;
+    default: doLog("Unknown command $command!");
+        die("Unknown command $command!");
+}
+
+function preFreeze()
+{
+    global $_config;
+    // Used to indicate if the lock acquisition process started or not;
+    $started = false;
+    for ($i = 1; $i < $_config['snapshotTimeout']; $i++) {
+        // Check if we have any long running queries
+        if (!$started && findMaxQueryExecution() < $_config['lockWaitTimeout']) {
+            doLog("Not started, and no long running queries; Attempting lock acquisition.");
+            exec('nohup /usr/sbin/pre-freeze-mysql-lock > /dev/null 2> /dev/null < /dev/null &');
+            $started = true;
+            // give it a bit of time to connect and stuff
+            usleep( 300000);
+        }
+        if ($started && is_readable($_config['runFile'])) {
+            doLog("Lock process started, looks like run file is readable.");
+            // Check for the run file, and grab all information
+            // We need PID of the process, connection ID to mysql, indication if the lock is started, acquired,
+            //      or else (and time of that action)
+            $processInfo = unserialize(file_get_contents($_config['runFile']));
+            if ($processInfo['lockStatus'] == 'acquired') {
+                doLog("Yup, Lock acquired!");
+                exit(0);
+            }
+            if ($processInfo['lockStatus'] == 'waiting'
+                && (time() - $processInfo['startTime']) > $_config['lockWaitTimeout']) {
+                doLog("Lock status is waiting, and for longer than $_config[lockWaitTimeout] seconds. Killing the process.");
+                // we're waiting for lock acquisition for too long, need to kill the process and mysql query
+                postThaw();
+            }
+        }
+        doLog( "Iteration $i of $_config[snapshotTimeout]");
+        sleep(1);
+    }
+    doLog(" = TIMEOUT = . We've failed to acquire the lock.");
+    exit(1);
+}
+
+function postThaw()
+{
+    global $_config;
+    $processInfo = unserialize(file_get_contents($_config['runFile']));
+    doLog( "Ending lock process, and cleaning up");
+    posix_kill( $processInfo['PID'], 9); // 9 for SIGKILL, as sometimes PHP does not have it defined
+    mysql_query( "KILL " . $processInfo['mysqlConnId']);
+    unlink($_config['runFile']);
+    exit(0);
+}
+
+function mysqlLock()
+{
+    global $_config;
+
+    $run = array();
+    // This will be our unix PID so that it can be killed in case it runs too long
+    $run['PID'] = posix_getpid();
+    // This will be the connection ID acquiring the lock in case we need to kill it
+    $conn = mysql_fetch_row(mysql_query('SELECT CONNECTION_ID()'));
+    $run['mysqlConnId'] = $conn[0];
+    // waiting means we sent the query, but did not get the lock yet
+    $run['lockStatus'] = 'waiting';
+    file_put_contents($_config['runFile'], serialize($run));
+
+    doLog("Trying to acquire the lock now...");
+    mysql_query('FLUSH TABLES WITH READ LOCK');
+
+    // If we're here, we have the lock. Write this to the status file.
+    $run['lockStatus'] = 'acquired';
+    file_put_contents($_config['runFile'], serialize($run));
+    // Log will be written by the parent process, so we're not doing it here now.
+
+    // This will ensure that we release the lock from here if the snapshot process takes too long
+    sleep($_config['maxLockTime']);
+    mysql_query('UNLOCK TABLES');
+    mysql_close();
+
+    $run['lockStatus'] = 'released';
+    file_put_contents($_config['runFile'], serialize($run));
+    doLog(' == Oops! == Lock was released due to the maxLockTime. Check why snapshot took so long.');
+
+    exit(0);
+}
+
+function findMaxQueryExecution()
+{
+    $res = mysql_query('SHOW PROCESSLIST');
+    $max = 0;
+    while ($row = mysql_fetch_assoc($res)) {
+        if ($row['Command'] != 'Sleep' && $row['Command'] != 'Delayed insert' && $row['Time'] > $max) {
+            $max = $row['Time'];
+        }
+    }
+    return $max;
+}
+
+function doLog( $message)
+{
+    global $_config;
+    if ($_config['logFile'] != '') {
+        file_put_contents( $_config['logFile'], date('Y-m-d H:i:s ') . $message . "\n", FILE_APPEND);
+    }
+}
