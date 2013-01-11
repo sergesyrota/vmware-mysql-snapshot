@@ -15,10 +15,12 @@ Installation
 -------------------------------------------
 Place pre-freeze-script file in /usr/sbin, and run these:
 
+.. 001-commands-start
 	chmod 755 /usr/sbin/pre-freeze-script
 	ln -s /usr/sbin/pre-freeze-script /usr/sbin/post-thaw-script
 	ln -s /usr/sbin/pre-freeze-script /usr/sbin/pre-freeze-mysql-lock
-
+.. 001-commands-end
+	
 This will:
 
 1. Set proper execution permissions on the main file
