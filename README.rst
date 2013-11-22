@@ -7,7 +7,7 @@ Requirements
 -------------------------------------------
 * You'll need a Linux OS under VMware (ESX 4 & 5 tested, not sure about compatibility with others)
 * VMware tools installed and running
-* Snapshots shold be taken with "Quiesce guest file system"
+* Snapshots should be taken with "Quiesce guest file system"
 * SUPER privileges to MySQL instance on localhost
 * PHP's MySQL and POSIX extensions (php-mysql and php-process on CentOS repos)
 
@@ -38,9 +38,9 @@ All files are symlinks to the same source, and depending which file is ran, appr
 
 When VMware wants to take a snapshot, it invoked pre-freeze-script through vmware-tools. This function connects to MySQL, and starts looking for a good time to jump in. Definition of good time: there are no long running queries on the server (running $_config['lockWaitTimeout'] seconds or longer). At this point, queries in status "Sleep" or "Delayed insert" are ignored, as they don't block flush command. When it found the window of opportunity, it forks a child process calling pre-freeze-mysql-lock with nohup (so that it is not killed when this one is done), suppressing all output (so that it continues in the background without pausing).
 
-Child process makes a new connection to MySQL and writes it's status to the run file ($_config['runFile']). After that, it runs "FLUSH TABLES WITH READ LOCK" on MySQL instance. At this point, 2 things can happen:
+Child process makes a new connection to MySQL and writes its status to the run file ($_config['runFile']). After that, it runs "FLUSH TABLES WITH READ LOCK" on MySQL instance. At this point, 2 things can happen:
 
-1. If the flush is successful, we will write to the status file what happened, and will just sit there waiting for everyone to do their thing. That means parent process will check the file, see that lock is aquired, and will exit with the status of 0. Then VMware will proceed with taking a file system snapshot.
+1. If the flush is successful, we will write to the status file what happened and will just sit there waiting for everyone to do their thing. That means parent process will check the file, see that lock is aquired, and will exit with the status of 0. Then VMware will proceed with taking a file system snapshot.
 2. We will happen to launch after some heavy query started, and we'll be sitting there and waiting when it finishes (what if it takes hours?). This can go on, but only for a limited time (approximately $_config['lockWaitTimeout'] seconds). If we are unable to flush tables during this time, our parent (knowing PID and MySQL connection from the runFile) will terminate this process, and kill MySQL query. This will free MySQL to accept new connections, and we'll wait for another time to take a snapshot.
 
 After VMware is done taking it's snapshot, vmware-tools will call post-thaw-script. This will read current status form the run file, and will terminate blocking flush tables in MySQL, and kill pre-freeze-mysql-lock process. In case VMware takes too long, or something else happens, MySQL lock will be released after $_config['maxLockTime'] seconds.
