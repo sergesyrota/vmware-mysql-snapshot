@@ -127,6 +127,7 @@ function mysqlLock()
     $run['mysqlConnId'] = $conn[0];
     // waiting means we sent the query, but did not get the lock yet
     $run['lockStatus'] = 'waiting';
+    $run['startTime'] = time();
     file_put_contents($_config['runFile'], serialize($run));
 
     doLog("Trying to acquire the lock now...");
