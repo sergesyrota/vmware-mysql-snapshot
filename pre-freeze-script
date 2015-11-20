@@ -10,6 +10,9 @@ chmod 755 /usr/sbin/pre-freeze-script
 ln -s /usr/sbin/pre-freeze-script /usr/sbin/post-thaw-script
 ln -s /usr/sbin/pre-freeze-script /usr/sbin/pre-freeze-mysql-lock
 yum install php-process
+ * Replace yum with apt-get or other package manager if you do not have one.
+ * php-process might be known as php5-process
+ *
  * Check the config below, and set mysql login and password for the instance you're working with.
  * Then don't forget to check "Quiesce guest file system" when doing a backup
  * You can check log file to make sure that it is being called properly.
@@ -43,6 +46,16 @@ $_config['lockWaitTimeout'] = 10; // seconds
 // For how long at most should we hold the lock once it is acquired
 $_config['maxLockTime'] = 15; // seconds
 
+// What exit code should be provided on error (like unable to acquire lock, can't connect to database, etc)
+// 0 would mean normal exit, signaling to vmware it's ok to proceed, non-0 will cause snapshot to fail
+$_config['errorExitCode'] = 1;
+
+// When checking for long running queries, which "Command" values should be ignored
+$_config['processlistIgnoreCommands'] = array('Sleep', 'Delayed insert', 'Binlog Dump', 'Connect');
+
+// When true, all log messages are also sent to STDOUT
+$_config['outputLog'] = false;
+
 /**
  * END Configuration
  * Do not change anything beyond this point, unless you really know what you're doing.
@@ -50,7 +63,10 @@ $_config['maxLockTime'] = 15; // seconds
  */
 
 // Connect to MySQL database first
-mysql_connect('localhost', $_config['mysqlLogin'], $_config['mysqlPass']) || die('Unable to connect to MySQL!');
+$mysqli = new mysqli('localhost', $_config['mysqlLogin'], $_config['mysqlPass']);
+if ($mysqli->connect_error) {
+    doFail('MySQL connect Error (' . $mysqli->connect_errno . ') ' . $mysqli->connect_error);
+}
 
 // Determine what was intended to be ran, by looking at the command line
 $command = basename($argv[0]);
@@ -62,8 +78,7 @@ switch ($command) {
         break;
     case 'pre-freeze-mysql-lock': mysqlLock();
         break;
-    default: doLog("Unknown command $command!");
-        die("Unknown command $command!");
+    default: doFail("Unknown command $command!");
 }
 
 function preFreeze()
@@ -100,38 +115,45 @@ function preFreeze()
         doLog( "Iteration $i of $_config[snapshotTimeout]");
         sleep(1);
     }
-    doLog(" = TIMEOUT = . We've failed to acquire the lock.");
-    exit(1);
+    doFail(" = TIMEOUT = . We've failed to acquire the lock.");
 }
 
 function postThaw()
 {
-    global $_config;
+    global $_config, $mysqli;
     $processInfo = unserialize(file_get_contents($_config['runFile']));
     doLog( "Ending lock process, and cleaning up");
     posix_kill( $processInfo['PID'], 9); // 9 for SIGKILL, as sometimes PHP does not have it defined
-    mysql_query( "KILL " . $processInfo['mysqlConnId']);
+    $mysqli->query( "KILL " . $processInfo['mysqlConnId']);
     unlink($_config['runFile']);
     exit(0);
 }
 
 function mysqlLock()
 {
-    global $_config;
+    global $_config, $mysqli;
 
     $run = array();
     // This will be our unix PID so that it can be killed in case it runs too long
     $run['PID'] = posix_getpid();
     // This will be the connection ID acquiring the lock in case we need to kill it
-    $conn = mysql_fetch_row(mysql_query('SELECT CONNECTION_ID()'));
-    $run['mysqlConnId'] = $conn[0];
+    if (!($result = $mysqli->query('SELECT CONNECTION_ID()'))) {
+        doFail(sprintf('MySQL query error getting connection ID: %s', $mysqli->error));
+    }
+    $conn = $result->fetch_array();
+    $run['mysqlConnId'] = (int)$conn[0];
+    if ($run['mysqlConnId'] == 0) {
+        doFail(sprintf('Error getting connection ID. Query result: %s', var_export($conn, true)));
+    }
     // waiting means we sent the query, but did not get the lock yet
     $run['lockStatus'] = 'waiting';
     $run['startTime'] = time();
     file_put_contents($_config['runFile'], serialize($run));
 
     doLog("Trying to acquire the lock now...");
-    mysql_query('FLUSH TABLES WITH READ LOCK');
+    if (!$mysqli->query('FLUSH TABLES WITH READ LOCK')) {
+        doFail(sprintf('MySQL query error flushing tables: %s', $mysqli->error));
+    }
 
     // If we're here, we have the lock. Write this to the status file.
     $run['lockStatus'] = 'acquired';
@@ -140,8 +162,9 @@ function mysqlLock()
 
     // This will ensure that we release the lock from here if the snapshot process takes too long
     sleep($_config['maxLockTime']);
-    mysql_query('UNLOCK TABLES');
-    mysql_close();
+    // No error check, as at this point there is nothing we can do or signal.
+    $mysqli->query('UNLOCK TABLES');
+    $mysqli->close();
 
     $run['lockStatus'] = 'released';
     file_put_contents($_config['runFile'], serialize($run));
@@ -152,20 +175,37 @@ function mysqlLock()
 
 function findMaxQueryExecution()
 {
-    $res = mysql_query('SHOW PROCESSLIST');
+    global $mysqli, $_config;
+    if (!($res = $mysqli->query('SHOW PROCESSLIST'))) {
+        doFail(sprintf('MySQL query error while looking at processlist: %s', $mysqli->error));
+    }
     $max = 0;
-    while ($row = mysql_fetch_assoc($res)) {
-        if ($row['Command'] != 'Sleep' && $row['Command'] != 'Delayed insert' && $row['Time'] > $max) {
+    while ($row = $res->fetch_assoc()) {
+        //
+        if ( $row['Time'] > $max && !in_array($row['Command'], $_config['processlistIgnoreCommands'])) {
             $max = $row['Time'];
         }
     }
+    dolog(sprintf('Longest running query: %d', $max));
     return $max;
 }
 
-function doLog( $message)
+function doLog($message)
 {
     global $_config;
-    if ($_config['logFile'] != '') {
-        file_put_contents( $_config['logFile'], date('Y-m-d H:i:s ') . $message . "\n", FILE_APPEND);
+    $d = DateTime::createFromFormat('U.u', microtime(true));
+    $logMessage = $d->format("Y-m-d H:i:s.u ") . $message . PHP_EOL;
+    if ($_config['outputLog']) {
+        echo $logMessage;
     }
+    if ($_config['logFile'] != '') {
+        file_put_contents( $_config['logFile'], $logMessage, FILE_APPEND);
+    }
+}
+
+function doFail($message)
+{
+    global $_config;
+    doLog($message);
+    exit($_config['errorExitCode']);
 }

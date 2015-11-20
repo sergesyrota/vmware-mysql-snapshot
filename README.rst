@@ -9,7 +9,7 @@ Requirements
 * VMware tools installed and running
 * Snapshots should be taken with "Quiesce guest file system"
 * SUPER privileges to MySQL instance on localhost
-* PHP's MySQL and POSIX extensions (php-mysql and php-process on CentOS repos)
+* PHP's MySQLi and POSIX extensions (built-in and php-process on CentOS 6 repo)
 
 Installation
 -------------------------------------------
@@ -36,7 +36,7 @@ How it works
 -------------------------------------------
 All files are symlinks to the same source, and depending which file is ran, appropriate function is invoked.
 
-When VMware wants to take a snapshot, it invoked pre-freeze-script through vmware-tools. This function connects to MySQL, and starts looking for a good time to jump in. Definition of good time: there are no long running queries on the server (running $_config['lockWaitTimeout'] seconds or longer). At this point, queries in status "Sleep" or "Delayed insert" are ignored, as they don't block flush command. When it found the window of opportunity, it forks a child process calling pre-freeze-mysql-lock with nohup (so that it is not killed when this one is done), suppressing all output (so that it continues in the background without pausing).
+When VMware wants to take a snapshot, it invoked pre-freeze-script through vmware-tools. This function connects to MySQL, and starts looking for a good time to jump in. Definition of good time: there are no long running queries on the server (running $_config['lockWaitTimeout'] seconds or longer). At this point, queries in status "Sleep", "Delayed insert", "Binlog Dump", and "Connect" are ignored (list is configurable), as they don't block flush command. When it found the window of opportunity, it forks a child process calling pre-freeze-mysql-lock with nohup (so that it is not killed when this one is done), suppressing all output (so that it continues in the background without pausing).
 
 Child process makes a new connection to MySQL and writes its status to the run file ($_config['runFile']). After that, it runs "FLUSH TABLES WITH READ LOCK" on MySQL instance. At this point, 2 things can happen:
 
