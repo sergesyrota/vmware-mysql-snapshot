@@ -34,7 +34,7 @@ This will:
 
 Then edit pre-freeze-script, typing in your MySQL credentials (you need SUPER privileges for this). You can also modify default values for run and log file, as well as timout values.
 
-Add your log file to logrotate, to avoid its uncontrolled growth.
+Add your log file to logrotate, to avoid its uncontrolled growth. Sample vmware-mysql-snapshot.logrotate file provided with default parameters for your convenience. Just copy it into /etc/logrotate.d folder.
 
 How it works
 -------------------------------------------

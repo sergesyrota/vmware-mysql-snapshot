@@ -1,0 +1,6 @@
+/var/log/vmware-freeze-script.log {
+    daily
+    missingok
+    notifempty
+    rotate 1
+}
