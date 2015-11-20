@@ -9,9 +9,6 @@
 chmod 755 /usr/sbin/pre-freeze-script
 ln -s /usr/sbin/pre-freeze-script /usr/sbin/post-thaw-script
 ln -s /usr/sbin/pre-freeze-script /usr/sbin/pre-freeze-mysql-lock
-yum install php-process
- * Replace yum with apt-get or other package manager if you do not have one.
- * php-process might be known as php5-process
  *
  * Check the config below, and set mysql login and password for the instance you're working with.
  * Then don't forget to check "Quiesce guest file system" when doing a backup
@@ -24,7 +21,7 @@ yum install php-process
  */
 
 // MySQL connection parameters
-$_config['mysqlLogin'] = '';
+$_config['mysqlLogin'] = 'root';
 $_config['mysqlPass'] = '';
 // Host name will always be localhost, as there is no point in locking a remote instance,
 // as this one needs to be flushed
@@ -54,7 +51,7 @@ $_config['errorExitCode'] = 1;
 $_config['processlistIgnoreCommands'] = array('Sleep', 'Delayed insert', 'Binlog Dump', 'Connect');
 
 // When true, all log messages are also sent to STDOUT
-$_config['outputLog'] = false;
+$_config['outputLog'] = true;
 
 /**
  * END Configuration
@@ -122,8 +119,11 @@ function postThaw()
 {
     global $_config, $mysqli;
     $processInfo = unserialize(file_get_contents($_config['runFile']));
-    doLog( "Ending lock process, and cleaning up");
-    posix_kill( $processInfo['PID'], 9); // 9 for SIGKILL, as sometimes PHP does not have it defined
+    doLog("Ending lock process, and cleaning up");
+    // -9 for SIGKILL
+    if ($processInfo['PID'] > 0) {
+        exec(sprintf('kill -9 %d > /dev/null 2> /dev/null < /dev/null', $processInfo['PID']));
+    }
     $mysqli->query( "KILL " . $processInfo['mysqlConnId']);
     unlink($_config['runFile']);
     exit(0);
@@ -135,7 +135,7 @@ function mysqlLock()
 
     $run = array();
     // This will be our unix PID so that it can be killed in case it runs too long
-    $run['PID'] = posix_getpid();
+    $run['PID'] = getmypid();
     // This will be the connection ID acquiring the lock in case we need to kill it
     if (!($result = $mysqli->query('SELECT CONNECTION_ID()'))) {
         doFail(sprintf('MySQL query error getting connection ID: %s', $mysqli->error));

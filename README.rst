@@ -9,7 +9,7 @@ Requirements
 * VMware tools installed and running
 * Snapshots should be taken with "Quiesce guest file system"
 * SUPER privileges to MySQL instance on localhost
-* PHP's MySQLi and POSIX extensions (built-in and php-process on CentOS 6 repo)
+* PHP's MySQLi extension (usually built-in)
 
 Installation
 -------------------------------------------
