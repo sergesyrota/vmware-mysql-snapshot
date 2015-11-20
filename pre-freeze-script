@@ -51,7 +51,7 @@ $_config['errorExitCode'] = 1;
 $_config['processlistIgnoreCommands'] = array('Sleep', 'Delayed insert', 'Binlog Dump', 'Connect');
 
 // When true, all log messages are also sent to STDOUT
-$_config['outputLog'] = true;
+$_config['outputLog'] = false;
 
 /**
  * END Configuration
@@ -153,6 +153,18 @@ function mysqlLock()
     doLog("Trying to acquire the lock now...");
     if (!$mysqli->query('FLUSH TABLES WITH READ LOCK')) {
         doFail(sprintf('MySQL query error flushing tables: %s', $mysqli->error));
+    }
+
+    // Get master position; Useful when doind slave resync from snapshot or backup
+    if ($result = $mysqli->query('SHOW MASTER STATUS')) {
+        if ($result->num_rows > 0) {
+            $row = $result->fetch_assoc();
+            doLog(sprintf('Master file: %s; Position: %d', $row['File'], $row['Position']));
+        } else {
+            doLog('Skipping replication master status, as server does not seem to be set up as one.');
+        }
+    } else {
+        doLog(sprintf('MySQL query error getting master status: %s', $mysqli->error));
     }
 
     // If we're here, we have the lock. Write this to the status file.

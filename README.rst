@@ -11,6 +11,10 @@ Requirements
 * SUPER privileges to MySQL instance on localhost
 * PHP's MySQLi extension (usually built-in)
 
+Bonus
+-------------------------------------------
+As a bonus, script will dump master status into log file right after successful flush. This makes it extremely easy to use backup done with snapshot like that to resync your slave (or seed new slave).
+
 Installation
 -------------------------------------------
 
@@ -40,7 +44,7 @@ When VMware wants to take a snapshot, it invoked pre-freeze-script through vmwar
 
 Child process makes a new connection to MySQL and writes its status to the run file ($_config['runFile']). After that, it runs "FLUSH TABLES WITH READ LOCK" on MySQL instance. At this point, 2 things can happen:
 
-1. If the flush is successful, we will write to the status file what happened and will just sit there waiting for everyone to do their thing. That means parent process will check the file, see that lock is aquired, and will exit with the status of 0. Then VMware will proceed with taking a file system snapshot.
+1. If the flush is successful, we will get replication master position (if server is configured as such) for log file. Then write to the status file what happened and will just sit there waiting for everyone to do their thing. That means parent process will check the file, see that lock is aquired, and will exit with the status of 0. Then VMware will proceed with taking a file system snapshot.
 2. We will happen to launch after some heavy query started, and we'll be sitting there and waiting when it finishes (what if it takes hours?). This can go on, but only for a limited time (approximately $_config['lockWaitTimeout'] seconds). If we are unable to flush tables during this time, our parent (knowing PID and MySQL connection from the runFile) will terminate this process, and kill MySQL query. This will free MySQL to accept new connections, and we'll wait for another time to take a snapshot.
 
 After VMware is done taking it's snapshot, vmware-tools will call post-thaw-script. This will read current status form the run file, and will terminate blocking flush tables in MySQL, and kill pre-freeze-mysql-lock process. In case VMware takes too long, or something else happens, MySQL lock will be released after $_config['maxLockTime'] seconds.
