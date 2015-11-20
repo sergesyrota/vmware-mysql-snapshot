@@ -8,7 +8,7 @@ Requirements
 * You'll need a Linux OS under VMware (ESX 4 & 5 tested, not sure about compatibility with others)
 * VMware tools installed and running
 * Snapshots should be taken with "Quiesce guest file system"
-* SUPER privileges to MySQL instance on localhost
+* SUPER, RELOAD, PROCESS privileges to MySQL instance on localhost
 * PHP's MySQLi extension (usually built-in)
 
 Bonus
